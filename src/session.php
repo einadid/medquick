@@ -1,61 +1,54 @@
 <?php
-// src/session.php
-function secure_session_start() {
-    $session_name = 'quickmed_session';
-    $secure = false; // Set to true if using HTTPS in production
-    $httponly = true;
-    $samesite = 'Strict';
+// FILE: src/session.php
+// PURPOSE: Manages secure session startup and includes helper functions.
 
+/**
+ * Starts a secure PHP session with recommended settings.
+ */
+function secure_session_start() {
+    // Define session cookie parameters for security
+    $session_name = 'quickmed_session';
+    $secure = false; // Set to true if you are using HTTPS in production
+    $httponly = true; // Prevents JavaScript from accessing the session cookie
+    $samesite = 'Strict'; // Prevents the browser from sending the cookie with cross-site requests
+
+    // Force sessions to only use cookies, not URLs
     if (ini_set('session.use_only_cookies', 1) === false) {
-        // Log error, critical for security
-        exit('Error: Could not initiate a safe session.');
+        // This is a critical security setting. If it fails, stop execution.
+        error_log('FATAL: Could not force sessions to use only cookies.');
+        exit('A critical security error occurred. Please contact the administrator.');
     }
 
+    // Get current cookie parameters and update them with secure settings
     $cookieParams = session_get_cookie_params();
     session_set_cookie_params([
         'lifetime' => $cookieParams['lifetime'],
-        'path' => $cookieParams['path'],
-        'domain' => $cookieParams['domain'],
-        'secure' => $secure,
+        'path'     => $cookieParams['path'],
+        'domain'   => $cookieParams['domain'],
+        'secure'   => $secure,
         'httponly' => $httponly,
         'samesite' => $samesite
     ]);
 
+    // Set the session name and start the session
     session_name($session_name);
     session_start();
 }
 
+// Start the secure session for any script that includes this file
 secure_session_start();
 
+// CRITICAL: Include the helper functions. This line makes all functions from helpers.php available.
 require_once __DIR__ . '/helpers.php';
 
-// Generate a new CSRF token if one doesn't exist
+// Automatically generate a CSRF token for the user's session if it doesn't exist.
+// This token will be used in all POST forms for security.
 if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
-
-// --- src/helpers.php ---
-
-function e($string) {
-    return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
-}
-
-function redirect($url) {
-    header("Location: " . $url);
-    exit();
-}
-
-function verify_csrf_token($token) {
-    if (!hash_equals($_SESSION['csrf_token'], $token)) {
-        // Log this attempt
-        die('CSRF token validation failed.');
+    try {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    } catch (Exception $e) {
+        // Handle error if random_bytes fails
+        error_log('FATAL: Could not generate CSRF token. ' . $e->getMessage());
+        exit('A critical security error occurred.');
     }
-}
-
-function is_logged_in() {
-    return isset($_SESSION['user_id']);
-}
-
-function has_role($role) {
-    return isset($_SESSION['role']) && $_SESSION['role'] === $role;
 }
