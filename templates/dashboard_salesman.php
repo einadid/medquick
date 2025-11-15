@@ -1,23 +1,17 @@
 <?php
 // FILE: templates/dashboard_salesman.php (Final Professional Version)
-// PURPOSE: A comprehensive and actionable dashboard for the Salesman, with improved mobile UX.
+// PURPOSE: A comprehensive and actionable dashboard for the Salesman, integrated with the new layout.
 ?>
-<!-- This main content div is placed inside the Salesman layout by header.php -->
+<!-- This main div is now placed inside the main content area by header.php -->
 <div class="fade-in p-4 sm:p-6 space-y-8">
 
-    <!-- Header Section with a dedicated mobile logout button -->
-    <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+    <!-- Header Section with Mobile Profile Link (replaces logout button) -->
+    <div class="flex justify-between items-center">
         <div>
-            <h1 class="text-3xl font-bold text-slate-800">Dashboard</h1>
+            <h1 class="text-3xl font-bold text-slate-800">Salesman Dashboard</h1>
             <p class="text-gray-600">Your daily sales and inventory hub.</p>
         </div>
-        <!-- **NEW & IMPROVED: Mobile Logout Button** -->
-        <div class="lg:hidden">
-            <a href="logout.php" class="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 font-semibold py-2 px-4 rounded-lg transition-colors border border-red-200">
-                <i class="fas fa-sign-out-alt"></i>
-                <span>Logout</span>
-            </a>
-        </div>
+        <!-- On mobile, the profile link is in the top bar from header.php -->
     </div>
 
     <!-- Main Content Grid -->
@@ -26,7 +20,7 @@
         <!-- Left/Main Column: Actions, Stats, and Recent Sales -->
         <div class="lg:col-span-2 space-y-8">
             
-            <!-- 1. Start New Sale Call-to-Action -->
+            <!-- 1. Start New Sale CTA -->
             <a href="pos.php" class="block bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-center p-10 rounded-xl shadow-lg hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1">
                 <i class="fas fa-cash-register text-5xl mb-4"></i>
                 <h2 class="text-4xl font-extrabold">Start New Sale</h2>
@@ -35,13 +29,19 @@
             
             <!-- 2. Today's Sales Stats -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div class="bg-white p-6 rounded-lg shadow-md border">
-                    <p class="text-sm font-medium text-gray-500">Your Shop's POS Sales Today</p>
-                    <p class="text-3xl font-bold text-slate-800 mt-1">৳<span class="counter" data-target="<?= (int)($stats['today_sales'] ?? 0); ?>">0</span></p>
+                <div class="bg-white p-6 rounded-lg shadow-md border flex items-center gap-4">
+                    <div class="bg-blue-100 text-blue-600 w-12 h-12 rounded-lg flex items-center justify-center"><i class="fas fa-dollar-sign text-xl"></i></div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500">Your POS Sales Today</p>
+                        <p class="text-3xl font-bold text-slate-800 mt-1">৳<span class="counter" data-target="<?= (int)($stats['today_sales'] ?? 0); ?>">0</span></p>
+                    </div>
                 </div>
-                <div class="bg-white p-6 rounded-lg shadow-md border">
-                    <p class="text-sm font-medium text-gray-500">POS Transactions Today</p>
-                    <p class="text-3xl font-bold text-slate-800 mt-1 counter" data-target="<?= (int)($stats['sales_count'] ?? 0); ?>">0</p>
+                <div class="bg-white p-6 rounded-lg shadow-md border flex items-center gap-4">
+                     <div class="bg-purple-100 text-purple-600 w-12 h-12 rounded-lg flex items-center justify-center"><i class="fas fa-exchange-alt text-xl"></i></div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500">POS Transactions Today</p>
+                        <p class="text-3xl font-bold text-slate-800 mt-1 counter" data-target="<?= (int)($stats['sales_count'] ?? 0); ?>">0</p>
+                    </div>
                 </div>
             </div>
 
@@ -63,14 +63,14 @@
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
                             <?php if (empty($recent_sales)): ?>
-                                <tr><td colspan="4" class="px-4 py-10 text-center text-gray-500">You haven't made any sales yet today.</td></tr>
+                                <tr><td colspan="4" class="px-4 py-10 text-center text-gray-500">You haven't made any sales yet.</td></tr>
                             <?php else: foreach ($recent_sales as $sale): ?>
                                 <tr class="hover:bg-gray-50">
                                     <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">#<?= e($sale['id']) ?></td>
                                     <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"><?= date('h:i A', strtotime($sale['created_at'])) ?></td>
                                     <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-semibold">৳<?= e(number_format($sale['total_amount'], 2)) ?></td>
                                     <td class="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
-                                        <a href="order_details.php?id=<?= e($sale['id']) ?>" class="text-teal-600 hover:text-teal-900">View/Manage</a>
+                                        <a href="order_details.php?id=<?= e($sale['id']) ?>" class="text-teal-600 hover:text-teal-900">View</a>
                                     </td>
                                 </tr>
                             <?php endforeach; endif; ?>
@@ -105,13 +105,8 @@
                     <ul class="space-y-3 text-sm">
                         <?php foreach ($expiring_soon_items as $item): ?>
                             <li class="flex justify-between items-center border-b pb-2 last:border-b-0">
-                                <div>
-                                    <p class="font-medium text-gray-800"><?= e($item['name']) ?></p>
-                                    <p class="text-xs text-gray-400">Batch: <?= e($item['batch_number']) ?></p>
-                                </div>
-                                <span class="font-bold text-red-500" title="Expires on <?= date('d M, Y', strtotime($item['expiry_date'])) ?>">
-                                    <?= date('d M', strtotime($item['expiry_date'])) ?>
-                                </span>
+                                <div><p class="font-medium text-gray-800"><?= e($item['name']) ?></p><p class="text-xs text-gray-400">Batch: <?= e($item['batch_number']) ?></p></div>
+                                <span class="font-bold text-red-500" title="Expires on <?= date('d M, Y', strtotime($item['expiry_date'])) ?>"><?= date('d M', strtotime($item['expiry_date'])) ?></span>
                             </li>
                         <?php endforeach; ?>
                     </ul>
