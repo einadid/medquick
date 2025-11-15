@@ -38,6 +38,16 @@ include 'templates/header.php';
             <div class="w-full <?= $is_customer ? 'lg:w-3/4' : '' ?>">
                 <h1 class="text-3xl font-bold text-slate-800 mb-8">Profile & Settings</h1>
                 
+                <!-- **NEW: Mobile Logout Button for Shop Admins/Salesmen** -->
+                <?php if (!$is_customer): ?>
+                <div class="lg:hidden mb-6">
+                    <a href="logout.php" class="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 font-semibold py-2 px-4 rounded-lg">
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span>Logout</span>
+                    </a>
+                </div>
+                <?php endif; ?>
+
                 <!-- Session Messages with auto-fade functionality using Alpine.js -->
                 <?php if (isset($_SESSION['success_message'])): ?>
                     <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-6" role="alert" x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 4000)" x-transition>

@@ -1,47 +1,58 @@
 <?php
+// FILE: api_pos_search.php (Final Robust Version)
 header('Content-Type: application/json');
-require_once 'src/session.php';
-require_once 'config/database.php';
-require_once 'config/constants.php';
 
-if (!has_role(ROLE_SALESMAN)) {
-    http_response_code(403);
-    echo json_encode(['error' => 'Access denied']);
-    exit;
-}
+// Enable error reporting to catch any issues during development
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
 
-$shop_id = $_SESSION['shop_id'];
-$response = [];
+try {
+    require_once 'src/session.php';
+    require_once 'config/database.php';
 
-if (isset($_GET['q'])) {
-    $query = trim($_GET['q']);
-    
-    if (strlen($query) >= 2) {
-        try {
-            $searchTerm = "%" . $query . "%";
-            // This query is specific to the salesman's shop
-            // It finds medicines that exist in their shop's inventory
-            $sql = "
-                SELECT m.id, m.name, m.manufacturer, ib.price, SUM(ib.quantity) as stock
-                FROM medicines m
-                JOIN inventory_batches ib ON m.id = ib.medicine_id
-                WHERE ib.shop_id = ? 
-                  AND ib.quantity > 0 
-                  AND ib.expiry_date > CURDATE()
-                  AND (m.name LIKE ? OR m.manufacturer LIKE ?)
-                GROUP BY m.id, m.name, m.manufacturer, ib.price
-                ORDER BY m.name
-                LIMIT 10
-            ";
-            
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$shop_id, $searchTerm, $searchTerm]);
-            $response = $stmt->fetchAll();
-
-        } catch (PDOException $e) {
-            // error_log("POS Search API error: " . $e->getMessage());
-        }
+    if (!has_role(ROLE_SALESMAN)) {
+        http_response_code(403);
+        throw new Exception('Access Denied. Salesman role required.');
     }
-}
 
-echo json_encode($response);
+    $shop_id = $_SESSION['shop_id'];
+    $query = trim($_GET['q'] ?? '');
+    $category = trim($_GET['category'] ?? '');
+
+    $params = [$shop_id];
+    $sql = "
+        SELECT m.id, m.name, m.manufacturer, m.image_path, ib.price, SUM(ib.quantity) as stock
+        FROM medicines m
+        JOIN inventory_batches ib ON m.id = ib.medicine_id
+        WHERE ib.shop_id = ? AND ib.quantity > 0 AND ib.expiry_date > CURDATE()
+    ";
+
+    if (!empty($query)) {
+        $sql .= " AND (m.name LIKE ? OR m.manufacturer LIKE ?)";
+        $params[] = "%$query%";
+        $params[] = "%$query%";
+    }
+    
+    if (!empty($category)) {
+        $sql .= " AND m.category = ?";
+        $params[] = $category;
+    }
+
+    $sql .= " GROUP BY m.id ORDER BY m.name ASC LIMIT 50";
+    
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $results = $stmt->fetchAll();
+    
+    echo json_encode(['success' => true, 'medicines' => $results]);
+
+} catch (Throwable $e) {
+    http_response_code(500);
+    error_log("API POS Search Error: " . $e->getMessage());
+    echo json_encode([
+        'success' => false, 
+        'message' => 'Server error while searching for products.',
+        'error_detail' => $e->getMessage() // For debugging
+    ]);
+}
+?>

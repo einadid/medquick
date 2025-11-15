@@ -1,21 +1,26 @@
-# <IfModule mod_rewrite.c>
-#     <IfModule mod_negotiation.c>
-#         Options -MultiViews -Indexes
-#     </IfModule>
+# Enable the URL rewriting engine
+RewriteEngine On
 
-#     RewriteEngine On
+# Set the default index file
+DirectoryIndex index.php
 
-#     # Handle Authorization Header
-#     RewriteCond %{HTTP:Authorization} .
-#     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+# Prevent directory listing
+Options -Indexes
 
-#     # Redirect Trailing Slashes If Not A Folder...
-#     RewriteCond %{REQUEST_FILENAME} !-d
-#     RewriteCond %{REQUEST_URI} (.+)/$
-#     RewriteRule ^ %1 [L,R=301]
+# --- Rules for removing .php extension ---
+# 1. Check if the request is not for an existing file
+RewriteCond %{REQUEST_FILENAME} !-f
+# 2. Check if the request is not for an existing directory
+RewriteCond %{REQUEST_FILENAME} !-d
+# 3. Check if a .php file with that name exists
+RewriteCond %{REQUEST_FILENAME}.php -f
+# 4. If all conditions are met, internally rewrite the URL to add .php
+RewriteRule ^(.*)$ $1.php [L]
 
-#     # Send Requests To Front Controller...
-#     RewriteCond %{REQUEST_FILENAME} !-d
-#     RewriteCond %{REQUEST_FILENAME} !-f
-#     RewriteRule ^ index.php [L]
-# </IfModule>
+# Block access to sensitive directories
+RewriteRule ^(src|config|templates)/ - [F,L]
+
+# Block access to this .htaccess file itself
+<Files .htaccess>
+    Require all denied
+</Files>

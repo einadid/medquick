@@ -1,182 +1,160 @@
 <?php
-// Ensure this script is called by our application
+// FILE: checkout.php (Final & Fixed Version)
 require_once 'src/session.php';
 require_once 'config/database.php';
-require_once 'config/constants.php';
 
-// Set the response content type to JSON, as this is an API endpoint
-header('Content-Type: application/json');
+if (!is_logged_in() || !has_role(ROLE_CUSTOMER)) { redirect('login.php?redirect=checkout.php'); }
 
-// ---------------------------
-// 1. SECURITY AND VALIDATION
-// ---------------------------
-
-// Security: Only logged-in customers can place an order.
-if (!has_role(ROLE_CUSTOMER)) {
-    http_response_code(403); // Forbidden
-    echo json_encode(['success' => false, 'message' => 'Access Denied. Only customers can place orders.']);
-    exit;
-}
-
-// Security: This endpoint should only be accessed via POST method.
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405); // Method Not Allowed
-    echo json_encode(['success' => false, 'message' => 'Invalid request method.']);
-    exit;
-}
-
-// Get the raw POST data (which is a JSON string from the fetch request)
-$input = json_decode(file_get_contents('php://input'), true);
-$cart = $input['cart'] ?? null;
-
-// Validation: Check if the cart is empty or not provided.
-if (empty($cart)) {
-    echo json_encode(['success' => false, 'message' => 'Cannot process checkout. Your cart is empty.']);
-    exit;
-}
-
-// ---------------------------------------------------------------------
-// 2. TRANSACTION AND CORE LOGIC (FEFO INVENTORY DEDUCTION)
-// ---------------------------------------------------------------------
-
-// Start a database transaction. This ensures that all database operations
-// (updating stock, creating order, creating order items) either all succeed
-// or all fail together, preventing data inconsistency.
-$pdo->beginTransaction();
-
+$user_id = $_SESSION['user_id'];
 try {
-    $total_order_amount = 0;
-    $order_items_data = []; // An array to hold processed items before inserting into the DB
-    $shop_id_for_order = null; // We need to determine which shop will fulfill the order
-
-    // --- Server-side Validation and FEFO Deduction Loop ---
-    foreach ($cart as $medicine_id => $item) {
-        // Sanitize inputs received from the client
-        $medicine_id = (int)$medicine_id;
-        $quantity_requested = (int)$item['qty'];
-
-        if ($quantity_requested <= 0) {
-            // Skip invalid items or throw an error
-            continue;
-        }
-
-        // --- FEFO LOGIC START ---
-        // Fetch all available batches for this medicine from inventory,
-        // ordered by the nearest expiry date first.
-        $stmt = $pdo->prepare(
-            "SELECT id, shop_id, quantity, price, expiry_date 
-             FROM inventory_batches 
-             WHERE medicine_id = ? AND quantity > 0 AND expiry_date > CURDATE()
-             ORDER BY expiry_date ASC"
-        );
-        $stmt->execute([$medicine_id]);
-        $available_batches = $stmt->fetchAll();
-
-        // If no batches are found, the item is completely out of stock.
-        if (empty($available_batches)) {
-            throw new Exception("Sorry, '{$item['name']}' is out of stock and cannot be ordered.");
-        }
-        
-        // Simplification: We'll assume the entire order is fulfilled by the first shop
-        // that has stock of any item. A more complex system might split orders or find the best shop.
-        if ($shop_id_for_order === null) {
-            $shop_id_for_order = $available_batches[0]['shop_id'];
-        }
-
-        $quantity_fulfilled = 0;
-        $cost_for_item = 0;
-        
-        // Loop through the available batches (which are already sorted by expiry date)
-        foreach ($available_batches as $batch) {
-            // If we have already fulfilled the requested quantity, stop processing batches.
-            if ($quantity_fulfilled >= $quantity_requested) {
-                break;
-            }
-
-            // How much more do we need to fulfill the request?
-            $needed_from_this_batch = $quantity_requested - $quantity_fulfilled;
-            
-            // How much can we actually take from this batch? (The minimum of what we need vs. what's available)
-            $take_from_this_batch = min($needed_from_this_batch, $batch['quantity']);
-
-            // **CRITICAL: Update the inventory batch quantity in the database**
-            $update_stmt = $pdo->prepare("UPDATE inventory_batches SET quantity = quantity - ? WHERE id = ?");
-            $update_stmt->execute([$take_from_this_batch, $batch['id']]);
-
-            // Update our counters for this item
-            $quantity_fulfilled += $take_from_this_batch;
-            $cost_for_item += $take_from_this_batch * $batch['price'];
-        }
-        // --- FEFO LOGIC END ---
-
-        // After checking all batches, if we still couldn't fulfill the request, there isn't enough stock.
-        if ($quantity_fulfilled < $quantity_requested) {
-            throw new Exception("Not enough stock for '{$item['name']}'. Requested {$quantity_requested}, but only {$quantity_fulfilled} are available.");
-        }
-
-        // Add the cost of this item to the grand total for the order.
-        $total_order_amount += $cost_for_item;
-        
-        // Store the processed item details to be inserted into the `order_items` table later.
-        $order_items_data[] = [
-            'medicine_id' => $medicine_id,
-            'quantity' => $quantity_requested,
-            'price_per_unit' => $cost_for_item / $quantity_requested // Calculate the average price if taken from multiple batches
-        ];
-    }
+    $user_stmt = $pdo->prepare("SELECT full_name, email, phone FROM users WHERE id = ?");
+    $user_stmt->execute([$user_id]);
+    $current_user = $user_stmt->fetch();
     
-    // Safety check: If no shop could be determined, it means no items had any stock.
-    if ($shop_id_for_order === null) {
-        throw new Exception("Could not fulfill the order. All items in your cart may be out of stock.");
-    }
+    $addresses_stmt = $pdo->prepare("SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC");
+    $addresses_stmt->execute([$user_id]);
+    $saved_addresses = $addresses_stmt->fetchAll();
 
-    // ---------------------------
-    // 3. CREATE ORDER RECORDS
-    // ---------------------------
-
-    // Create the main order record in the `orders` table.
-    $order_stmt = $pdo->prepare(
-        "INSERT INTO orders (customer_id, shop_id, total_amount, payment_method, order_status, order_source) 
-         VALUES (?, ?, ?, ?, ?, ?)"
-    );
-    $order_stmt->execute([$_SESSION['user_id'], $shop_id_for_order, $total_order_amount, 'Cash on Delivery', 'Pending', 'web']);
-    $order_id = $pdo->lastInsertId(); // Get the ID of the newly created order.
-
-    // Now, create the records for each item in the order in the `order_items` table.
-    $order_item_stmt = $pdo->prepare(
-        "INSERT INTO order_items (order_id, medicine_id, quantity, price_per_unit) VALUES (?, ?, ?, ?)"
-    );
-    foreach ($order_items_data as $item) {
-        $order_item_stmt->execute([$order_id, $item['medicine_id'], $item['quantity'], $item['price_per_unit']]);
-    }
-
-    // ---------------------------------
-    // 4. COMMIT AND SEND SUCCESS RESPONSE
-    // ---------------------------------
-
-    // If we've reached this point without any errors, all database operations were successful.
-    // We can now permanently save the changes.
-    $pdo->commit();
-
-    // Log this critical action to the audit trail
-    log_audit($pdo, 'CUSTOMER_ORDER', "Order ID: {$order_id}, Total: " . number_format($total_order_amount, 2));
-
-    // Send a success response back to the client's JavaScript.
-    echo json_encode([
-        'success' => true, 
-        'message' => 'Order placed successfully!', 
-        'order_id' => $order_id
-    ]);
-
-} catch (Exception $e) {
-    // ------------------------------------
-    // 5. ROLLBACK AND SEND ERROR RESPONSE
-    // ------------------------------------
-    
-    // An error occurred at some point. Roll back all database changes made during this transaction.
-    $pdo->rollBack();
-
-    // Send a failure response back to the client with the specific error message.
-    http_response_code(400); // Bad Request
-    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    $shops = $pdo->query("SELECT DISTINCT s.id, s.name, s.address FROM shops s JOIN inventory_batches ib ON s.id = ib.shop_id WHERE ib.quantity > 0 AND ib.expiry_date > CURDATE() ORDER BY s.name ASC")->fetchAll();
+} catch (PDOException $e) {
+    error_log("Checkout page fetch error: " . $e->getMessage());
+    $current_user = null; $saved_addresses = []; $shops = [];
 }
+
+$pageTitle = "Checkout";
+include 'templates/header.php';
+?>
+
+<div class="fade-in bg-slate-50 py-12" x-data="{ useNewAddress: <?= empty($saved_addresses) ? 'true' : 'false' ?> }">
+    <div class="container mx-auto px-4 sm:px-6 max-w-4xl">
+        <h1 class="text-3xl font-bold text-slate-800 mb-8">Checkout</h1>
+        
+        <div class="bg-white p-8 rounded-lg shadow-md border">
+            <form id="checkout-form" class="space-y-8">
+                <!-- Step 1: Delivery Details -->
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-700 mb-4 border-b pb-2 flex items-center gap-3"><span class="w-8 h-8 bg-teal-600 text-white rounded-full flex items-center justify-center">1</span> Delivery Details</h2>
+                    <?php if (!empty($saved_addresses)): ?>
+                    <div class="space-y-4">
+                        <p class="text-sm text-gray-600">Select a saved address or add a new one.</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <?php foreach($saved_addresses as $index => $addr): ?>
+                            <label class="block p-4 border rounded-lg cursor-pointer hover:border-teal-500 has-[:checked]:bg-teal-50 has-[:checked]:border-teal-500">
+                                <input type="radio" name="address_option" value="<?= e($addr['id']) ?>" @click="useNewAddress = false" class="sr-only" <?= $index === 0 ? 'checked' : '' ?>>
+                                <div><p class="font-bold"><?= e($addr['full_name']) ?> <?php if($addr['is_default']) echo '<span class="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full ml-2">Default</span>' ?></p><p class="text-sm text-gray-600 mt-2"><?= nl2br(e($addr['address_line'])) ?></p><p class="text-sm text-gray-600 mt-1">Phone: <?= e($addr['phone']) ?></p></div>
+                            </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <label class="block p-4 border rounded-lg cursor-pointer hover:border-teal-500 has-[:checked]:bg-teal-50 has-[:checked]:border-teal-500">
+                             <input type="radio" name="address_option" value="new" @click="useNewAddress = true" class="sr-only">
+                             <p class="font-bold flex items-center gap-2"><i class="fas fa-plus-circle"></i> Add a New Address</p>
+                        </label>
+                    </div>
+                    <?php endif; ?>
+                    <div x-show="useNewAddress" x-transition class="mt-6 space-y-4 <?= !empty($saved_addresses) ? 'border-t pt-6' : '' ?>">
+                        <p x-show="<?= !empty($saved_addresses) ? 'true' : 'false' ?>" class="text-md font-semibold text-gray-800">New Address Details:</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div><label for="full_name">Full Name</label><input type="text" name="full_name" value="<?= e($current_user['full_name']) ?>" :required="useNewAddress" class="mt-1 w-full p-2 border rounded-md"></div>
+                            <div><label for="phone">Contact Phone</label><input type="tel" name="phone" value="<?= e($current_user['phone']) ?>" :required="useNewAddress" class="mt-1 w-full p-2 border rounded-md"></div>
+                        </div>
+                        <div><label for="address">Full Delivery Address</label><textarea name="address" rows="3" :required="useNewAddress" class="mt-1 w-full p-2 border rounded-md"></textarea></div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Fulfilling Pharmacy -->
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-700 mb-4 border-b pb-2 flex items-center gap-3"><span class="w-8 h-8 bg-teal-600 text-white rounded-full flex items-center justify-center">2</span> Fulfilling Pharmacy</h2>
+                    <select name="shop_id" id="shop_id" required class="w-full p-3 border rounded-md bg-white">
+                        <option value="">-- Select a Pharmacy --</option>
+                        <?php foreach($shops as $shop): ?><option value="<?= e($shop['id']) ?>"><?= e($shop['name']) ?> - (<?= e($shop['address']) ?>)</option><?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <!-- Step 3: Payment & Confirmation -->
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-700 mb-4 border-b pb-2 flex items-center gap-3"><span class="w-8 h-8 bg-teal-600 text-white rounded-full flex items-center justify-center">3</span> Payment & Confirmation</h2>
+                    <div class="p-6 bg-slate-50 rounded-lg border">
+                        <div class="mt-2 p-4 border-2 border-teal-500 rounded-lg bg-teal-50 flex items-center gap-3">
+                            <i class="fas fa-money-bill-wave text-teal-600 text-2xl"></i>
+                            <div><p class="font-bold text-teal-800">Cash on Delivery</p><p class="text-xs text-gray-600">Pay with cash when your order is delivered.</p></div>
+                        </div>
+                        <div class="mt-6 text-right">
+                            <button type="submit" id="confirm-order-btn" class="btn-primary text-lg w-full md:w-auto disabled:bg-gray-400 disabled:cursor-not-allowed">
+                                <span class="btn-text"><i class="fas fa-lock mr-2"></i> Confirm & Place Order</span>
+                                <span class="btn-loader hidden"><i class="fas fa-spinner fa-spin"></i> Placing Order...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<?php 
+// **CRITICAL FIX:** We must include the footer, which loads main.js where showToast() is defined.
+include 'templates/footer.php'; 
+?>
+
+<!-- We move the page-specific script AFTER the footer so main.js is loaded first. -->
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Check if showToast is available. If not, provide a fallback.
+    if (typeof showToast === 'undefined') {
+        window.showToast = function(message, type) {
+            alert(`[${type.toUpperCase()}] ${message}`);
+        }
+    }
+
+    const checkoutForm = document.getElementById('checkout-form');
+    const confirmBtn = document.getElementById('confirm-order-btn');
+    if (!checkoutForm || !confirmBtn) return;
+
+    const btnText = confirmBtn.querySelector('.btn-text');
+    const btnLoader = confirmBtn.querySelector('.btn-loader');
+
+    checkoutForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const cart = JSON.parse(localStorage.getItem('quickmed_cart')) || {};
+        if (Object.keys(cart).length === 0) {
+            showToast('Your cart is empty. Please add items before checking out.', 'error');
+            return;
+        }
+        if (!checkoutForm.checkValidity()) {
+            showToast('Please fill all required fields correctly.', 'error');
+            checkoutForm.reportValidity(); // This will show native browser validation errors
+            return;
+        }
+
+        confirmBtn.disabled = true;
+        btnText.classList.add('hidden');
+        btnLoader.classList.remove('hidden');
+
+        const formData = new FormData(checkoutForm);
+        formData.append('cart_data', JSON.stringify(cart));
+        formData.append('csrf_token', document.querySelector('meta[name="csrf-token"]').getAttribute('content'));
+
+        try {
+            const response = await fetch('place_order.php', { method: 'POST', body: formData });
+            const result = await response.json();
+
+            if (result.success) {
+                localStorage.removeItem('quickmed_cart');
+                showToast(result.message, 'success');
+                setTimeout(() => { window.location.href = `order_details.php?id=${result.order_id}`; }, 2000);
+            } else {
+                showToast(result.message || 'An unknown error occurred.', 'error', 5000);
+                confirmBtn.disabled = false;
+                btnText.classList.remove('hidden');
+                btnLoader.classList.add('hidden');
+            }
+        } catch (error) {
+            showToast('An unexpected network error occurred.', 'error');
+            confirmBtn.disabled = false;
+            btnText.classList.remove('hidden');
+            btnLoader.classList.add('hidden');
+        }
+    });
+});
+</script>
