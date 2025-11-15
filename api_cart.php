@@ -1,29 +1,23 @@
 <?php
-// FILE: api_cart.php (Most Robust Version for Debugging)
+// FILE: api_cart.php (Final Robust Version)
 header('Content-Type: application/json');
-
-// Immediately enable error reporting to catch any include/DB issues.
-ini_set('display_errors', 1);
-error_reporting(E_ALL);
-
 try {
+    require_once 'src/session.php';
     require_once 'config/database.php';
 
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'message' => 'Method Not Allowed']);
-        exit;
+        throw new Exception('Method Not Allowed', 405);
     }
 
     $input = json_decode(file_get_contents('php://input'), true);
-    $medicine_ids = $input['ids'] ?? [];
+    $medicineIds = $input['ids'] ?? [];
 
-    if (empty($medicine_ids) || !is_array($medicine_ids)) {
-        echo json_encode(['success' => true, 'data' => []]); // Return success with empty data
+    if (empty($medicineIds) || !is_array($medicineIds)) {
+        echo json_encode(['success' => true, 'data' => []]);
         exit;
     }
 
-    $sanitized_ids = array_filter(array_map('intval', $medicine_ids), fn($id) => $id > 0);
+    $sanitized_ids = array_filter(array_map('intval', $medicineIds), fn($id) => $id > 0);
     if (empty($sanitized_ids)) {
         echo json_encode(['success' => true, 'data' => []]);
         exit;
@@ -32,36 +26,27 @@ try {
     $placeholders = implode(',', array_fill(0, count($sanitized_ids), '?'));
     
     $sql = "
-        SELECT 
-            m.id, m.name, m.image_path,
-            (SELECT MIN(price) FROM inventory_batches WHERE medicine_id = m.id AND quantity > 0 AND expiry_date > CURDATE()) as price
-        FROM medicines m
-        WHERE m.id IN ($placeholders)
+        SELECT m.id, m.name, m.image_path,
+               (SELECT MIN(price) FROM inventory_batches WHERE medicine_id = m.id AND quantity > 0 AND expiry_date > CURDATE()) as price
+        FROM medicines m WHERE m.id IN ($placeholders)
     ";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($sanitized_ids);
     $results = $stmt->fetchAll();
     
-    $response_data = [];
+    $responseData = [];
     foreach ($results as $row) {
-        $response_data[$row['id']] = [
+        $responseData[$row['id']] = [
             'name' => $row['name'],
             'image' => $row['image_path'] ?? 'assets/images/default_med.png',
-            'price' => $row['price'] ? (float)$row['price'] : null,
+            'price' => $row['price'] ? (float)$row['price'] : null
         ];
     }
-
-    echo json_encode(['success' => true, 'data' => $response_data]);
-
+    echo json_encode(['success' => true, 'data' => $responseData]);
 } catch (Throwable $e) {
-    // Catch any error (PDOException or other) and return it as JSON
-    http_response_code(500);
-    error_log("API_CART_ERROR: " . $e->getMessage() . " in " . $e->getFile() . " on line " . $e->getLine());
-    echo json_encode([
-        'success' => false, 
-        'message' => 'A server error occurred.',
-        'error_detail' => $e->getMessage() // For debugging
-    ]);
+    http_response_code($e->getCode() >= 400 ? $e->getCode() : 500);
+    error_log("API_CART_ERROR: " . $e->getMessage());
+    echo json_encode(['success' => false, 'message' => 'Server error while fetching cart data.']);
 }
 ?>

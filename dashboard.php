@@ -55,30 +55,52 @@ include 'templates/header.php';
 
 // Use a switch statement to handle logic for each role.
 switch ($role) {
-    case ROLE_ADMIN:
-        try {
-            // **FINAL & CORRECTED SQL for Admin Stats with Profit**
-            $stats = $pdo->query("
-                SELECT 
-                    (SELECT COUNT(*) FROM users) as total_users,
-                    (SELECT COUNT(*) FROM medicines) as total_medicines,
-                    (SELECT COALESCE(SUM(quantity), 0) FROM inventory_batches) as total_stock,
-                    (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE DATE(created_at) = CURDATE()) as today_sales,
-                    (SELECT COALESCE(SUM((oi.price_per_unit - oi.cost_per_unit) * oi.quantity), 0) 
-                     FROM order_items oi JOIN orders o ON oi.order_id = o.id
-                     WHERE DATE(o.created_at) = CURDATE()) as today_profit
-            ")->fetch();
-            
-            $all_users = $pdo->query("SELECT u.id, u.full_name, u.email, u.role, u.is_active, s.name as shop_name FROM users u LEFT JOIN shops s ON u.shop_id = s.id ORDER BY u.created_at DESC")->fetchAll();
-            $chart_data = get_last_7_days_sales($pdo);
-            $chart_labels_json = $chart_data['labels'];
-            $chart_data_json = $chart_data['data'];
-        } catch (PDOException $e) {
-            error_log("Admin Dashboard DB Error: " . $e->getMessage());
-            $stats = []; $all_users = [];
-        }
-        include 'templates/dashboard_admin.php';
-        break;
+// dashboard.php ফাইলের switch স্টেটমেন্টের ভেতরে
+
+// dashboard.php ফাইলের switch স্টেটমেন্টের ভেতরে
+
+case ROLE_ADMIN:
+    // --- FINAL & COMPLETE DATA FETCHING FOR ADMIN DASHBOARD ---
+    try {
+        // 1. Fetch KPI Card Stats
+        $stats = $pdo->query("
+            SELECT 
+                (SELECT COUNT(*) FROM users) as total_users,
+                (SELECT COUNT(*) FROM medicines) as total_medicines,
+                (SELECT COALESCE(SUM(quantity), 0) FROM inventory_batches) as total_stock,
+                (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE DATE(created_at) = CURDATE()) as today_sales,
+                (SELECT COALESCE(SUM((oi.price_per_unit - oi.cost_per_unit) * oi.quantity), 0) 
+                 FROM order_items oi JOIN orders o ON oi.order_id = o.id
+                 WHERE DATE(o.created_at) = CURDATE()) as today_profit
+        ")->fetch();
+
+        // 2. Data for Charts (remains the same)
+        $chart_data = get_last_7_days_sales($pdo);
+        $chart_labels_json = $chart_data['labels'];
+        $chart_data_json = $chart_data['data'];
+        
+        $sales_by_shop_stmt = $pdo->query("SELECT s.name, COALESCE(SUM(o.total_amount), 0) as total FROM shops s LEFT JOIN orders o ON s.id = o.shop_id GROUP BY s.id ORDER BY total DESC");
+        $sales_by_shop = $sales_by_shop_stmt->fetchAll(PDO::FETCH_ASSOC);
+        $pie_chart_labels_json = json_encode(array_column($sales_by_shop, 'name'));
+        $pie_chart_data_json = json_encode(array_column($sales_by_shop, 'total'));
+        
+        // 3. **CRITICAL: Fetch all users for the dashboard table**
+        $all_users = $pdo->query("
+            SELECT u.id, u.full_name, u.email, u.role, u.is_active, s.name as shop_name 
+            FROM users u 
+            LEFT JOIN shops s ON u.shop_id = s.id 
+            ORDER BY u.created_at DESC
+        ")->fetchAll();
+
+    } catch (PDOException $e) {
+        error_log("Admin Dashboard DB Error: " . $e->getMessage());
+        // Set empty defaults on error
+        $stats = []; $all_users = []; $chart_labels_json = "[]"; $chart_data_json = "[]";
+        $pie_chart_labels_json = "[]"; $pie_chart_data_json = "[]";
+    }
+    
+    include 'templates/dashboard_admin.php';
+    break;
 
     // dashboard.php ফাইলের switch স্টেটমেন্টের ভেতরে
 
@@ -171,20 +193,50 @@ case ROLE_SHOP_ADMIN:
         include 'templates/dashboard_salesman.php';
         break;
 
-    case ROLE_CUSTOMER:
-        try {
-            $customer_stats_stmt = $pdo->prepare("SELECT (SELECT COUNT(*) FROM orders WHERE customer_id = ?) as total_orders, (SELECT points_balance FROM users WHERE id = ?) as health_wallet_points");
-            $customer_stats_stmt->execute([$user_id, $user_id]);
-            $stats = $customer_stats_stmt->fetch();
-            $latest_order_stmt = $pdo->prepare("SELECT * FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 1");
-            $latest_order_stmt->execute([$user_id]);
-            $latest_order = $latest_order_stmt->fetch();
-            $frequent_items_stmt = $pdo->prepare("SELECT m.id, m.name, m.image_path, MIN(ib.price) as price FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN medicines m ON oi.medicine_id = m.id LEFT JOIN inventory_batches ib ON m.id = ib.medicine_id AND ib.quantity > 0 WHERE o.customer_id = ? GROUP BY oi.medicine_id, m.id ORDER BY COUNT(oi.medicine_id) DESC LIMIT 4");
-            $frequent_items_stmt->execute([$user_id]);
-            $frequent_items = $frequent_items_stmt->fetchAll();
-        } catch (PDOException $e) { /* Error handling */ }
-        include 'templates/dashboard_customer.php';
-        break;
+    // dashboard.php ফাইলের switch স্টেটমেন্টের ভেতরে
+
+case ROLE_CUSTOMER:
+    // --- FINAL & COMPLETE DATA FETCHING FOR CUSTOMER DASHBOARD ---
+    try {
+        // 1. Fetch user's name and points balance
+        $user_stmt = $pdo->prepare("SELECT full_name, points_balance FROM users WHERE id = ?");
+        $user_stmt->execute([$user_id]);
+        $user_data = $user_stmt->fetch();
+        $stats['health_wallet_points'] = $user_data['points_balance'] ?? 0;
+
+        // 2. Fetch total order count
+        $orders_count_stmt = $pdo->prepare("SELECT COUNT(*) FROM orders WHERE customer_id = ?");
+        $orders_count_stmt->execute([$user_id]);
+        $stats['total_orders'] = $orders_count_stmt->fetchColumn();
+
+        // 3. Fetch the very latest order for the status tracker
+        $latest_order_stmt = $pdo->prepare("SELECT id, order_status FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 1");
+        $latest_order_stmt->execute([$user_id]);
+        $latest_order = $latest_order_stmt->fetch();
+
+        // 4. Fetch frequently purchased items for quick re-order
+        $frequent_items_stmt = $pdo->prepare("
+            SELECT 
+                m.id, m.name, m.image_path, MIN(ib.price) as price,
+                (SELECT SUM(quantity) FROM inventory_batches WHERE medicine_id = m.id AND quantity > 0) as total_stock
+            FROM order_items oi
+            JOIN orders o ON oi.order_id = o.id
+            JOIN medicines m ON oi.medicine_id = m.id
+            LEFT JOIN inventory_batches ib ON m.id = ib.medicine_id AND ib.quantity > 0
+            WHERE o.customer_id = ?
+            GROUP BY oi.medicine_id
+            ORDER BY COUNT(oi.medicine_id) DESC, m.name ASC
+            LIMIT 4
+        ");
+        $frequent_items_stmt->execute([$user_id]);
+        $frequent_items = $frequent_items_stmt->fetchAll();
+    } catch (PDOException $e) {
+        error_log("Customer Dashboard DB Error: " . $e->getMessage());
+        $stats = []; $latest_order = null; $frequent_items = [];
+    }
+    
+    include 'templates/dashboard_customer.php';
+    break;
 
     default:
         echo "<div class='text-center p-8'><p class='text-red-500'>Error: Unknown user role.</p></div>";

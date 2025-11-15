@@ -6,7 +6,7 @@ require_once 'config/database.php';
 header('Content-Type: application/json');
 
 // --- 1. Security & Initial Validation ---
-if (!has_role(ROLE_SALESMAN)) {
+if (!has_role(ROLE_SALESMAN) && !has_role(ROLE_ADMIN)) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => 'Access Denied.']);
     exit;
@@ -21,15 +21,16 @@ $input = json_decode(file_get_contents('php://input'), true);
 verify_csrf_token($input['csrf_token'] ?? '');
 
 $bill_items_from_client = $input['items'] ?? null;
-$discount_percent_from_client = (float)($input['discount'] ?? 0);
-$vat_rate_from_client = (float)($input['vat_rate'] ?? 0);
-$customer_id = (int)($input['customer_id'] ?? 1); // Default to 1 (Walk-in Customer)
+$discount_percent_from_client = isset($input['discount']) ? (float)$input['discount'] : 0;
+$vat_rate_from_client = isset($input['vat_rate']) ? (float)$input['vat_rate'] : 5;
+$customer_id = isset($input['customer_id']) ? (int)$input['customer_id'] : 1; // Default to 1 (Walk-in Customer)
 $shop_id = $_SESSION['shop_id'];
 $salesman_id = $_SESSION['user_id'];
 
 
 if (empty($bill_items_from_client)) {
-    echo json_encode(['success' => false, 'message' => 'The bill is empty.']);
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => 'The bill is empty. Please add items.']);
     exit;
 }
 
@@ -88,7 +89,7 @@ try {
     }
 
     if (empty($order_items_to_insert)) {
-        throw new Exception("No valid items were processed.");
+        throw new Exception("No valid items were processed from the bill.");
     }
     
     // --- 3. Final Calculation on Server-side ---
@@ -108,18 +109,27 @@ try {
     }
     
     // --- 6. Award Loyalty Points to Registered Customers ---
-    // Rule: 100 points for every 1000 Taka spent.
     $points_to_earn = floor($final_total_on_server / 1000) * 100;
-    // Don't award points to the default "Walk-in Customer" (ID 1)
-    if ($points_to_earn > 0 && $customer_id !== 1) {
+    $new_total_points = 0;
+    if ($points_to_earn > 0 && $customer_id !== 1) { // Don't award points to "Walk-in Customer"
         $pdo->prepare("UPDATE users SET points_balance = points_balance + ? WHERE id = ?")->execute([$points_to_earn, $customer_id]);
         $pdo->prepare("UPDATE orders SET points_earned = ? WHERE id = ?")->execute([$points_to_earn, $order_id]);
+        // Get the new total balance to send back to the receipt
+        $new_balance_stmt = $pdo->prepare("SELECT points_balance FROM users WHERE id = ?");
+        $new_balance_stmt->execute([$customer_id]);
+        $new_total_points = $new_balance_stmt->fetchColumn();
     }
     
     // --- 7. Finalize Transaction ---
     $pdo->commit();
     log_audit($pdo, 'POS_SALE', "Order ID: {$order_id}, Total: " . number_format($final_total_on_server, 2));
-    echo json_encode(['success' => true, 'message' => 'Sale completed successfully.', 'order_id' => $order_id]);
+    echo json_encode([
+        'success' => true, 
+        'message' => 'Sale completed successfully.', 
+        'order_id' => $order_id,
+        'points_earned' => $points_to_earn,
+        'new_total_points' => $new_total_points
+    ]);
 
 } catch (Exception $e) {
     if ($pdo->inTransaction()) {

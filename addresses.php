@@ -1,11 +1,14 @@
 <?php
-// FILE: addresses.php
+// FILE: addresses.php (Final Professional Version)
 // PURPOSE: Allows customers to manage their saved shipping addresses.
 
 require_once 'src/session.php';
 require_once 'config/database.php';
 
-if (!is_logged_in() || !has_role(ROLE_CUSTOMER)) { redirect('login.php'); }
+// Security check
+if (!is_logged_in() || !has_role(ROLE_CUSTOMER)) {
+    redirect('login.php');
+}
 
 $user_id = $_SESSION['user_id'];
 $pageTitle = "My Addresses";
@@ -16,9 +19,20 @@ try {
     $stmt->execute([$user_id]);
     $addresses = $stmt->fetchAll();
 } catch (PDOException $e) {
+    error_log("Addresses page fetch error: " . $e->getMessage());
     $addresses = [];
-    $_SESSION['error_message'] = "Could not load addresses.";
+    $_SESSION['error_message'] = "Could not load your addresses at this time.";
 }
+
+// Fetch current user details for pre-filling the form
+try {
+    $user_stmt = $pdo->prepare("SELECT full_name, phone FROM users WHERE id = ?");
+    $user_stmt->execute([$user_id]);
+    $current_user = $user_stmt->fetch();
+} catch (PDOException $e) {
+    $current_user = ['full_name' => '', 'phone' => ''];
+}
+
 
 include 'templates/header.php';
 ?>
@@ -26,53 +40,73 @@ include 'templates/header.php';
 <div class="fade-in bg-slate-50 py-12" x-data="{ showForm: false }">
     <div class="container mx-auto px-4 sm:px-6">
         <div class="flex flex-col lg:flex-row gap-8">
+            
             <!-- Sidebar Navigation -->
             <?php include 'templates/_customer_sidebar.php'; ?>
 
             <!-- Main Content -->
             <div class="w-full lg:w-3/4">
-                <div class="flex justify-between items-center mb-8">
+                <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-8">
                     <h1 class="text-3xl font-bold text-slate-800">My Addresses</h1>
-                    <button @click="showForm = !showForm" class="btn-primary"><i class="fas fa-plus mr-2"></i> Add New Address</button>
+                    <button @click="showForm = !showForm" class="btn-primary w-full sm:w-auto">
+                        <i class="fas fa-plus mr-2"></i> 
+                        <span x-text="showForm ? 'Cancel' : 'Add New Address'">Add New Address</span>
+                    </button>
                 </div>
                 
-                <!-- Messages -->
-                <?php if (isset($_SESSION['success_message'])): ?><div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-6" role="alert"><p><?= e($_SESSION['success_message']); ?></p></div><?php unset($_SESSION['success_message']); ?><?php endif; ?>
-                <?php if (isset($_SESSION['error_message'])): ?><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6" role="alert"><p><?= e($_SESSION['error_message']); ?></p></div><?php unset($_SESSION['error_message']); ?><?php endif; ?>
+                <!-- Session Messages -->
+                <?php if (isset($_SESSION['success_message'])): ?><div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-6" role="alert" x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 4000)" x-transition><p><?= e($_SESSION['success_message']); ?></p></div><?php unset($_SESSION['success_message']); ?><?php endif; ?>
+                <?php if (isset($_SESSION['error_message'])): ?><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6" role="alert" x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 4000)" x-transition><p><?= e($_SESSION['error_message']); ?></p></div><?php unset($_SESSION['error_message']); ?><?php endif; ?>
 
                 <!-- Add New Address Form (collapsible) -->
                 <div x-show="showForm" x-transition class="bg-white p-8 rounded-lg shadow-md border mb-8">
-                    <h2 class="text-xl font-bold mb-4">Add a New Address</h2>
+                    <h2 class="text-xl font-bold mb-4 text-slate-700">Add a New Address</h2>
                     <form action="address_process.php" method="POST" class="space-y-4">
                         <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
                         <input type="hidden" name="action" value="add">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div><label for="full_name" class="block text-sm font-medium">Full Name</label><input type="text" name="full_name" required class="mt-1 w-full p-2 border rounded-md"></div>
-                            <div><label for="phone" class="block text-sm font-medium">Phone Number</label><input type="text" name="phone" required class="mt-1 w-full p-2 border rounded-md"></div>
+                            <div><label for="full_name" class="block text-sm font-medium">Full Name</label><input type="text" name="full_name" value="<?= e($current_user['full_name']) ?>" required class="mt-1 w-full p-2 border rounded-md"></div>
+                            <div><label for="phone" class="block text-sm font-medium">Phone Number</label><input type="text" name="phone" value="<?= e($current_user['phone']) ?>" required class="mt-1 w-full p-2 border rounded-md"></div>
                         </div>
-                        <div><label for="address_line" class="block text-sm font-medium">Full Address</label><textarea name="address_line" rows="3" required class="mt-1 w-full p-2 border rounded-md"></textarea></div>
-                        <div class="flex items-center"><input type="checkbox" name="is_default" value="1" class="h-4 w-4 rounded border-gray-300 text-teal-600"><label for="is_default" class="ml-2 block text-sm">Set as default address</label></div>
-                        <div class="flex justify-end gap-4"><button type="button" @click="showForm = false" class="text-sm text-gray-600">Cancel</button><button type="submit" class="btn-primary">Save Address</button></div>
+                        <div><label for="address_line" class="block text-sm font-medium">Full Address (House, Road, Area, City)</label><textarea name="address_line" rows="3" required class="mt-1 w-full p-2 border rounded-md" placeholder="e.g., House 123, Road 4, Block B, Bashundhara R/A, Dhaka"></textarea></div>
+                        <div class="flex items-center"><input type="checkbox" name="is_default" value="1" id="is_default" class="h-4 w-4 rounded border-gray-300 text-teal-600"><label for="is_default" class="ml-2 block text-sm">Set as default address</label></div>
+                        <div class="flex justify-end gap-4 pt-4 border-t">
+                            <button type="button" @click="showForm = false" class="text-sm font-medium text-gray-600 px-4 py-2 rounded-md hover:bg-gray-100">Cancel</button>
+                            <button type="submit" class="btn-primary">Save Address</button>
+                        </div>
                     </form>
                 </div>
                 
                 <!-- Saved Addresses Grid -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <?php if (empty($addresses)): ?>
-                        <p class="md:col-span-2 text-center text-gray-500 py-10">You have no saved addresses. Add one to get started!</p>
+                        <div class="md:col-span-2 text-center text-gray-500 py-10 bg-white rounded-lg border">
+                            <p>You have no saved addresses. Add one to make checkout faster!</p>
+                        </div>
                     <?php else: foreach ($addresses as $address): ?>
                         <div class="bg-white p-6 rounded-lg shadow-md border relative">
                             <?php if ($address['is_default']): ?>
                                 <div class="absolute top-4 right-4 bg-teal-100 text-teal-700 text-xs font-bold px-2 py-1 rounded-full">Default</div>
                             <?php endif; ?>
-                            <p class="font-bold text-lg"><?= e($address['full_name']) ?></p>
-                            <p class="text-sm text-gray-600"><?= e($address['phone']) ?></p>
-                            <p class="text-sm text-gray-600 mt-2"><?= nl2br(e($address['address_line'])) ?></p>
+                            <p class="font-bold text-lg text-slate-800"><?= e($address['full_name']) ?></p>
+                            <p class="text-sm text-gray-600 mt-1"><?= e($address['phone']) ?></p>
+                            <p class="text-sm text-gray-600 mt-2 min-h-[40px]"><?= nl2br(e($address['address_line'])) ?></p>
                             <div class="mt-4 pt-4 border-t flex items-center gap-4 text-sm">
-                                <!-- <a href="#" class="text-teal-600 hover:underline">Edit</a> -->
-                                <form action="address_process.php" method="POST" onsubmit="return confirm('Are you sure?')"><input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>"><input type="hidden" name="action" value="delete"><input type="hidden" name="address_id" value="<?= e($address['id']) ?>"><button type="submit" class="text-red-500 hover:underline">Delete</button></form>
+                                <!-- Edit button can be added later, linking to an edit page -->
+                                <!-- <a href="#" class="font-semibold text-teal-600 hover:underline">Edit</a> -->
+                                <form action="address_process.php" method="POST" class="inline" onsubmit="return confirm('Are you sure you want to delete this address?');">
+                                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="address_id" value="<?= e($address['id']) ?>">
+                                    <button type="submit" class="font-semibold text-red-500 hover:underline">Delete</button>
+                                </form>
                                 <?php if (!$address['is_default']): ?>
-                                <form action="address_process.php" method="POST"><input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>"><input type="hidden" name="action" value="set_default"><input type="hidden" name="address_id" value="<?= e($address['id']) ?>"><button type="submit" class="font-semibold text-gray-600 hover:text-teal-600">Set as Default</button></form>
+                                    <form action="address_process.php" method="POST" class="inline">
+                                        <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                        <input type="hidden" name="action" value="set_default">
+                                        <input type="hidden" name="address_id" value="<?= e($address['id']) ?>">
+                                        <button type="submit" class="font-semibold text-gray-600 hover:text-teal-600">Set as Default</button>
+                                    </form>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -82,4 +116,5 @@ include 'templates/header.php';
         </div>
     </div>
 </div>
+
 <?php include 'templates/footer.php'; ?>
