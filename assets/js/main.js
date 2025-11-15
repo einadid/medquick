@@ -32,7 +32,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 if (suggestions.length > 0) {
                     suggestionsBox.innerHTML = suggestions.map(s => 
-                        `<a href="medicine.php?id=${s.id}" class="block p-2 hover:bg-gray-100">${s.name} <span class="text-sm text-gray-500">by ${s.manufacturer}</span></a>`
+                        `<a href="medicine.php?id=${s.id}" class="block p-2 hover:bg-gray-100">
+                            ${s.name} <span class="text-sm text-gray-500">by ${s.manufacturer}</span>
+                        </a>`
                     ).join('');
                     suggestionsBox.classList.remove('hidden');
                 } else {
@@ -62,8 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
         button.addEventListener('click', (e) => {
             const id = e.target.dataset.id;
             const name = e.target.dataset.name;
-            // In a real app, you'd also need price, image etc.
-            // This is a simplified example.
             const price = parseFloat(e.target.dataset.price || '10.00'); 
 
             let cart = getCart();
@@ -74,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             saveCart(cart);
             
-            // Give visual feedback
+            // Visual feedback
             e.target.textContent = 'Added!';
             setTimeout(() => { e.target.textContent = 'Add to Cart'; }, 1000);
             updateCartCount();
@@ -92,4 +92,40 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     updateCartCount();
+
+    // --- ANIMATED COUNTERS ---
+    const counters = document.querySelectorAll('.counter');
+    const speed = 200; // The lower the slower
+
+    const animateCounter = (counter) => {
+        const target = +counter.dataset.target;
+        const inc = target / speed;
+
+        let count = 0;
+
+        const updateCount = () => {
+            count += inc;
+            if (count < target) {
+                counter.innerText = Math.ceil(count);
+                setTimeout(updateCount, 1);
+            } else {
+                counter.innerText = target;
+            }
+        };
+        updateCount();
+    };
+
+    const counterObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                animateCounter(entry.target);
+                observer.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 0.5 });
+
+    counters.forEach(counter => {
+        counterObserver.observe(counter);
+    });
+
 });

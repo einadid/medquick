@@ -1,5 +1,3 @@
-CREATE DATABASE IF NOT EXISTS `quickmed_db`;
-USE `quickmed_db`;
 
 -- Main users table with roles
 CREATE TABLE `users` (
